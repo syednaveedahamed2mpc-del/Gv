@@ -10,22 +10,52 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Unit tests + APK
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
-      - name: Upload APK
+      - name: Print build environment
+        run: |
+          java -version
+          gradle --version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar" || echo 'Android platform will be provisioned by Gradle'
+      - name: Unit tests and debug APK
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+      - name: APK build summary
+        if: success()
+        run: |
+          echo '## NEXUS Sidekick build succeeded' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Build: v0.5.0-alpha' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Tests: passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Artifact: NEXUS-SIDEKICK-APK' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh app/build/outputs/apk/debug/ >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload installable APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: NEXUS-SIDEKICK-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostics after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEXUS-BUILD-REPORTS
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

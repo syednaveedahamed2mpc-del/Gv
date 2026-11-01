@@ -1,13 +1,27 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
- <uses-permission android:name="android.permission.INTERNET"/>
- <uses-permission android:name="android.permission.RECORD_AUDIO"/>
- <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
- <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
- <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
- <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
- <queries><intent><action android:name="android.speech.action.RECOGNIZE_SPEECH"/></intent></queries>
- <application android:theme="@android:style/Theme.Material.NoActionBar" android:label="NEXUS Sidekick" android:usesCleartextTraffic="false">
-  <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
-  <service android:name=".OverlayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-controlled floating assistant overlay"/></service>
- </application>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <queries>
+        <intent><action android:name="android.speech.RecognitionService"/></intent>
+        <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH"/></intent>
+        <intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent>
+        <package android:name="com.google.android.youtube"/>
+    </queries>
+    <application android:theme="@android:style/Theme.Material.NoActionBar"
+        android:label="NEXUS Sidekick" android:usesCleartextTraffic="false"
+        android:allowBackup="false">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <service android:name=".OverlayService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-controlled floating shortcut; voice recognition occurs in foreground activity"/>
+        </service>
+    </application>
 </manifest>

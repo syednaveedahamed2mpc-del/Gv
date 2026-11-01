@@ -1,12 +1,78 @@
 package com.nexus.sidekick;
-import android.app.*;import android.content.*;import android.graphics.Color;import android.graphics.PixelFormat;import android.graphics.drawable.GradientDrawable;import android.os.*;import android.view.*;import android.widget.*;import android.animation.*;
-public class OverlayService extends Service{
- WindowManager wm;TextView bubble;WindowManager.LayoutParams p;Handler handler=new Handler(Looper.getMainLooper());boolean longPressed=false;ValueAnimator glow;
- Runnable hold=()->{longPressed=true;glow=ValueAnimator.ofFloat(.85f,1.18f);glow.setDuration(480);glow.setRepeatCount(ValueAnimator.INFINITE);glow.setRepeatMode(ValueAnimator.REVERSE);glow.addUpdateListener(a->{float s=(float)a.getAnimatedValue();bubble.setScaleX(s);bubble.setScaleY(s);});glow.start();bubble.setText("🎙");Intent i=new Intent(this,MainActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);i.putExtra("start_listening",true);startActivity(i);};
- public void onCreate(){super.onCreate();NotificationManager nm=getSystemService(NotificationManager.class);nm.createNotificationChannel(new NotificationChannel("nexus","NEXUS floating shortcut",NotificationManager.IMPORTANCE_LOW));Notification.Builder nb=new Notification.Builder(this,"nexus").setContentTitle("NEXUS Sidekick").setContentText("Long-press orb to listen").setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentIntent(PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE));startForeground(42,nb.build());
- wm=(WindowManager)getSystemService(WINDOW_SERVICE);bubble=new TextView(this);bubble.setText("✦");bubble.setTextSize(28);bubble.setTextColor(Color.CYAN);bubble.setGravity(Gravity.CENTER);GradientDrawable bg=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xff152e55,0xff07152a});bg.setCornerRadius(100);bg.setStroke(3,0xff23e8ff);bubble.setBackground(bg);
- p=new WindowManager.LayoutParams(130,130,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);p.gravity=Gravity.TOP|Gravity.START;p.x=0;p.y=260;
- bubble.setOnTouchListener(new View.OnTouchListener(){float x,y;int ox,oy;boolean moved;public boolean onTouch(View v,MotionEvent e){switch(e.getAction()){case MotionEvent.ACTION_DOWN:x=e.getRawX();y=e.getRawY();ox=p.x;oy=p.y;moved=false;longPressed=false;handler.postDelayed(hold,550);return true;case MotionEvent.ACTION_MOVE:if(Math.abs(e.getRawX()-x)+Math.abs(e.getRawY()-y)>22){moved=true;handler.removeCallbacks(hold);}if(moved){p.x=ox+(int)(e.getRawX()-x);p.y=oy+(int)(e.getRawY()-y);wm.updateViewLayout(bubble,p);}return true;case MotionEvent.ACTION_UP:case MotionEvent.ACTION_CANCEL:handler.removeCallbacks(hold);if(!moved&&!longPressed&&e.getAction()==MotionEvent.ACTION_UP){Intent i=new Intent(OverlayService.this,MainActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(i);}if(glow!=null){glow.cancel();glow=null;}bubble.setScaleX(1);bubble.setScaleY(1);bubble.setText("✦");return true;}return false;}});
- try{wm.addView(bubble,p);}catch(Exception ex){stopSelf();}}
- public int onStartCommand(Intent i,int f,int id){return START_STICKY;}public android.os.IBinder onBind(Intent i){return null;}public void onDestroy(){handler.removeCallbacks(hold);if(glow!=null)glow.cancel();if(wm!=null&&bubble!=null)try{wm.removeView(bubble);}catch(Exception ignored){}super.onDestroy();}
+
+import android.app.*;
+import android.content.*;
+import android.graphics.PixelFormat;
+import android.os.*;
+import android.provider.Settings;
+import android.view.*;
+
+/** Overlay is drag-to-position, tap-to-open, long-hold-to-activate voice in foreground Activity. */
+public class OverlayService extends Service {
+    private WindowManager manager;
+    private VoiceOrbView orb;
+    private WindowManager.LayoutParams params;
+    private final Handler handler=new Handler(Looper.getMainLooper());
+    private Runnable pendingHold;
+    private boolean moved=false,longPressed=false;
+    @Override public void onCreate(){super.onCreate();
+        NotificationManager nm=getSystemService(NotificationManager.class);
+        nm.createNotificationChannel(new NotificationChannel("nexus_orb","NEXUS floating shortcut",NotificationManager.IMPORTANCE_LOW));
+        Intent open=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi=PendingIntent.getActivity(this,0,open,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification notice=new Notification.Builder(this,"nexus_orb")
+                .setContentTitle("NEXUS Sidekick").setContentText("Hold the orb to talk • tap to open")
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now).setOngoing(true).setContentIntent(pi).build();
+        startForeground(42,notice);
+        if(!Settings.canDrawOverlays(this)){Diagnostics.record(this,"OVERLAY","Missing overlay permission");stopSelf();return;}
+        manager=(WindowManager)getSystemService(WINDOW_SERVICE);
+        orb=new VoiceOrbView(this);
+        int size=(int)(getResources().getDisplayMetrics().density*68);
+        params=new WindowManager.LayoutParams(size,size,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
+        params.gravity=Gravity.TOP|Gravity.START;params.x=0;params.y=(int)(getResources().getDisplayMetrics().density*250);
+        orb.setOnTouchListener(new View.OnTouchListener(){
+            float startX,startY;int originX,originY;
+            final float dragThreshold=ViewConfiguration.get(OverlayService.this).getScaledTouchSlop()*2.5f;
+            @Override public boolean onTouch(View view,MotionEvent event){
+                switch(event.getActionMasked()){
+                    case MotionEvent.ACTION_DOWN:
+                        startX=event.getRawX();startY=event.getRawY();originX=params.x;originY=params.y;
+                        moved=false;longPressed=false;
+                        pendingHold=()->{
+                            if(moved)return;
+                            longPressed=true;orb.setListening(true);
+                            Diagnostics.record(OverlayService.this,"OVERLAY","Long-press accepted; requesting speech UI");
+                            launch(true);
+                        };
+                        handler.postDelayed(pendingHold,650);return true;
+                    case MotionEvent.ACTION_MOVE:
+                        if(!moved&&Math.hypot(event.getRawX()-startX,event.getRawY()-startY)>dragThreshold){
+                            moved=true;handler.removeCallbacks(pendingHold);Diagnostics.record(OverlayService.this,"OVERLAY","Orb moved");
+                        }
+                        if(moved){params.x=originX+(int)(event.getRawX()-startX);params.y=originY+(int)(event.getRawY()-startY);
+                            try{manager.updateViewLayout(orb,params);}catch(Exception ignored){}}
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:case MotionEvent.ACTION_UP:
+                        handler.removeCallbacks(pendingHold);
+                        if(event.getActionMasked()==MotionEvent.ACTION_UP&&!moved&&!longPressed){Diagnostics.record(OverlayService.this,"OVERLAY","Tap accepted");launch(false);}
+                        orb.setListening(false);return true;
+                    default:return false;
+                }
+            }
+        });
+        try{manager.addView(orb,params);Diagnostics.record(this,"OVERLAY","Floating orb attached");}
+        catch(Exception e){Diagnostics.record(this,"OVERLAY","Attach failed: "+e.getClass().getSimpleName());stopSelf();}
+    }
+    private void launch(boolean listen){
+        Intent i=new Intent(this,MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        if(listen)i.putExtra("start_listening",true);
+        try{startActivity(i);}catch(Exception e){Diagnostics.record(this,"OVERLAY","Activity launch blocked: "+e.getClass().getSimpleName());}
+    }
+    @Override public int onStartCommand(Intent i,int flags,int id){return START_STICKY;}
+    @Override public android.os.IBinder onBind(Intent i){return null;}
+    @Override public void onDestroy(){if(pendingHold!=null)handler.removeCallbacks(pendingHold);
+        if(manager!=null&&orb!=null)try{manager.removeView(orb);}catch(Exception ignored){}
+        Diagnostics.record(this,"OVERLAY","Service stopped");super.onDestroy();}
 }
