@@ -1,185 +1,34 @@
 package com.nexus.sidekick;
-
-import android.app.Activity;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.graphics.Color;
-import android.net.Uri;
-import android.os.Bundle;
-import android.provider.Settings;
-import android.speech.RecognizerIntent;
-import android.view.View;
-import android.widget.*;
-import org.json.*;
-import java.io.*;
-import java.net.*;
-import java.nio.charset.StandardCharsets;
-import java.util.*;
-
+import android.app.*;import android.os.*;import android.content.*;import android.net.Uri;import android.provider.Settings;import android.graphics.Color;import android.view.*;import android.widget.*;import android.graphics.drawable.GradientDrawable;import android.animation.*;import android.speech.*;import android.text.InputType;import org.json.*;import java.net.*;import java.io.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public class MainActivity extends Activity {
-    private LinearLayout panel;
-    private EditText input, apiKey;
-    private TextView status, answer;
-    private final String model = "gemini-2.5-flash";
-
-    private TextView label(String s, int size) {
-        TextView v = new TextView(this);
-        v.setText(s); v.setTextSize(size); v.setTextColor(Color.WHITE);
-        v.setPadding(8, 14, 8, 14); panel.addView(v); return v;
-    }
-    private void button(String title, Runnable action) {
-        Button b = new Button(this); b.setText(title); panel.addView(b);
-        b.setOnClickListener(v -> action.run());
-    }
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.rgb(10,17,31));
-        panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(26,45,26,35); scroll.addView(panel); setContentView(scroll);
-        label("✦ NEXUS // SIDEKICK", 26);
-        label("Voice • apps • search • Gemini AI", 15);
-        status = label("Ready", 14);
-        input = new EditText(this);
-        input.setTextColor(Color.WHITE); input.setHintTextColor(Color.LTGRAY);
-        input.setHint("Search YouTube for cats, open settings, or ask Gemini...");
-        panel.addView(input);
-        button("RUN / ASK GEMINI", () -> runCommand(input.getText().toString()));
-        button("TALK", () -> {
-            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            try { startActivityForResult(i,100); }
-            catch(Exception e) { status.setText("Speech recognizer unavailable: " + e.getMessage()); }
-        });
-        label("Gemini API key (saved only in this app on your phone)", 13);
-        apiKey = new EditText(this);
-        apiKey.setSingleLine(true); apiKey.setTextColor(Color.WHITE);
-        apiKey.setHintTextColor(Color.LTGRAY); apiKey.setHint("Paste Gemini API key");
-        apiKey.setInputType(129);
-        SharedPreferences prefs = getSharedPreferences("nexus_private", MODE_PRIVATE);
-        apiKey.setText(prefs.getString("gemini_key",""));
-        panel.addView(apiKey);
-        button("SAVE GEMINI KEY", () -> {
-            prefs.edit().putString("gemini_key", apiKey.getText().toString().trim()).apply();
-            status.setText("Gemini key saved locally. Do not share it or commit it to GitHub.");
-        });
-        answer = label("", 16);
-        button("ENABLE FLOATING SHORTCUT", () -> {
-            if (!Settings.canDrawOverlays(this)) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + getPackageName())));
-            } else {
-                try { startForegroundService(new Intent(this,OverlayService.class)); }
-                catch(Exception e) { status.setText("Overlay error: " + e.getMessage()); }
-            }
-        });
-        button("STOP FLOATING SHORTCUT", () -> stopService(new Intent(this,OverlayService.class)));
-        label("Searches open in your browser or supported app. Gemini prompts are sent to Google's API. This alpha does not execute Gemini-generated actions automatically.", 12);
-    }
-    @Override protected void onActivityResult(int req, int result, Intent data) {
-        super.onActivityResult(req,result,data);
-        if (req==100 && result==RESULT_OK && data!=null) {
-            ArrayList<String> words=data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-            if(words!=null && !words.isEmpty()) { input.setText(words.get(0)); runCommand(words.get(0)); }
-        }
-    }
-    private void browse(String url) {
-        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        i.addCategory(Intent.CATEGORY_BROWSABLE);
-        startActivity(i);
-    }
-    private void runCommand(String raw) {
-        String q=raw.trim(), l=q.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");
-        if(q.isEmpty()) {status.setText("Enter a command or question.");return;}
-        try {
-            String term=null; boolean youtube=false;
-            for(String prefix:new String[]{"search youtube for ","search on youtube for ","youtube search ","search youtube ","search for "}) {
-                if(l.startsWith(prefix)) {
-                    term=q.substring(prefix.length()).trim();
-                    youtube=!prefix.equals("search for ");
-                    break;
-                }
-            }
-            if(term==null) {
-                for(String prefix:new String[]{"search google for ","google search ","search on google for ","search google "}) {
-                    if(l.startsWith(prefix)) {term=q.substring(prefix.length()).trim();break;}
-                }
-            }
-            if(term!=null) {
-                if(term.isEmpty()) {status.setText("Tell me what to search for.");return;}
-                browse(youtube ? "https://www.youtube.com/results?search_query="+Uri.encode(term)
-                    : "https://www.google.com/search?q="+Uri.encode(term));
-                status.setText("Searching for: "+term);return;
-            }
-            if(l.equals("open youtube")||l.equals("youtube")) {
-                browse("https://www.youtube.com");status.setText("Opening YouTube");return;
-            }
-            if(l.equals("open settings")||l.equals("settings")) {
-                startActivity(new Intent(Settings.ACTION_SETTINGS));status.setText("Opening settings");return;
-            }
-            if(l.equals("open camera")||l.equals("camera")) {
-                startActivity(new Intent("android.media.action.STILL_IMAGE_CAMERA"));return;
-            }
-            if(l.equals("open browser")||l.equals("open chrome")) {
-                browse("https://www.google.com");return;
-            }
-            if(l.startsWith("open ")) {
-                String name=q.substring(5).trim();
-                Intent launch=null;
-                for(android.content.pm.ApplicationInfo app:getPackageManager().getInstalledApplications(0)) {
-                    if(getPackageManager().getApplicationLabel(app).toString().equalsIgnoreCase(name)) {
-                        launch=getPackageManager().getLaunchIntentForPackage(app.packageName);break;
-                    }
-                }
-                if(launch!=null) {startActivity(launch);status.setText("Opening "+name);return;}
-                status.setText("Can't find "+name+". Try a supported app or ask Gemini.");return;
-            }
-            askGemini(q);
-        } catch(Exception e) {status.setText("Command failed: "+e.getMessage());}
-    }
-    private void askGemini(String question) {
-        String key=getSharedPreferences("nexus_private",MODE_PRIVATE).getString("gemini_key","");
-        if(key.isEmpty()) {status.setText("Save your Gemini API key first.");return;}
-        status.setText("Asking Gemini...");answer.setText("");
-        new Thread(() -> {
-            HttpURLConnection connection=null;
-            try {
-                URL url=new URL("https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent");
-                connection=(HttpURLConnection)url.openConnection();
-                connection.setRequestMethod("POST");
-                connection.setRequestProperty("Content-Type","application/json");
-                connection.setRequestProperty("x-goog-api-key",key);
-                connection.setConnectTimeout(15000);connection.setReadTimeout(35000);
-                connection.setDoOutput(true);
-                JSONObject request=new JSONObject();
-                JSONObject part=new JSONObject().put("text",question);
-                JSONObject contents=new JSONObject().put("role","user").put("parts",new JSONArray().put(part));
-                request.put("contents",new JSONArray().put(contents));
-                try(OutputStream out=connection.getOutputStream()) {
-                    out.write(request.toString().getBytes(StandardCharsets.UTF_8));
-                }
-                int code=connection.getResponseCode();
-                InputStream stream=code>=200&&code<300?connection.getInputStream():connection.getErrorStream();
-                StringBuilder body=new StringBuilder();
-                try(BufferedReader reader=new BufferedReader(new InputStreamReader(stream,StandardCharsets.UTF_8))) {
-                    String line;while((line=reader.readLine())!=null)body.append(line);
-                }
-                JSONObject response=new JSONObject(body.toString());
-                if(code<200||code>=300)throw new Exception("Gemini HTTP "+code+": "+response.optJSONObject("error").optString("message","Request failed"));
-                JSONArray candidates=response.optJSONArray("candidates");
-                if(candidates==null||candidates.length()==0)throw new Exception("Gemini returned no answer.");
-                JSONArray parts=candidates.getJSONObject(0).getJSONObject("content").getJSONArray("parts");
-                StringBuilder reply=new StringBuilder();
-                for(int i=0;i<parts.length();i++) {
-                    String t=parts.getJSONObject(i).optString("text","");
-                    if(!t.isEmpty())reply.append(t).append("\n");
-                }
-                String result=reply.toString().trim();
-                runOnUiThread(() -> {answer.setText(result.isEmpty()?"No text in response.":result);status.setText("Gemini answered");});
-            }catch(Exception ex) {
-                String message=ex.getMessage();
-                runOnUiThread(() -> status.setText("Gemini error: "+message));
-            }finally{if(connection!=null)connection.disconnect();}
-        }).start();
-    }
+ LinearLayout panel; EditText input,key;TextView status,orb;SpeechRecognizer speech;boolean listening=false;ValueAnimator pulse;
+ TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(Color.WHITE);t.setPadding(8,12,8,12);panel.addView(t);return t;}
+ void button(String s,Runnable r){Button b=new Button(this);b.setText(s);panel.addView(b);b.setOnClickListener(v->r.run());}
+ public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(Color.rgb(8,14,29));ScrollView sc=new ScrollView(this);sc.setFillViewport(true);sc.setBackgroundColor(Color.rgb(8,14,29));panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(24,36,24,28);sc.addView(panel);setContentView(sc);
+ text("✦ NEXUS // SIDEKICK",26);text("VOICE • SEARCH • GEMINI",12);
+ orb=text("◉",65);orb.setGravity(Gravity.CENTER);orb.setTextColor(Color.CYAN);
+ status=text("Ready • tap TALK or long-press the floating orb",15);
+ input=new EditText(this);input.setTextColor(Color.WHITE);input.setHintTextColor(Color.LTGRAY);input.setHint("Search YouTube for music, or ask Gemini...");panel.addView(input);
+ button("RUN / SEARCH",()->runCommand(input.getText().toString()));
+ button("TALK • LISTEN",this::startListening);
+ button("ASK GEMINI",()->askGemini(input.getText().toString()));
+ key=new EditText(this);key.setSingleLine(true);key.setTextColor(Color.WHITE);key.setHintTextColor(Color.LTGRAY);key.setHint("Paste Gemini API key (saved on this device)");key.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);key.setText(getPreferences(0).getString("gemini_key",""));panel.addView(key);
+ button("SAVE API KEY LOCALLY",()->{getPreferences(0).edit().putString("gemini_key",key.getText().toString().trim()).apply();status.setText("Gemini key saved locally. Do not put keys in GitHub.");});
+ button("ENABLE FLOATING ORB",()->{if(!Settings.canDrawOverlays(this)){startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName())));}else{try{startForegroundService(new Intent(this,OverlayService.class));status.setText("Floating orb enabled. Long-press it to listen.");}catch(Exception e){status.setText(e.toString());}}});
+ button("STOP FLOATING ORB",()->stopService(new Intent(this,OverlayService.class)));
+ if(getIntent().getBooleanExtra("start_listening",false))new Handler(Looper.getMainLooper()).postDelayed(this::startListening,350);
+ }
+ void animate(boolean on){if(pulse!=null){pulse.cancel();pulse=null;}orb.setText(on?"◉ LISTENING":"◉");orb.setTextSize(on?31:65);if(on){pulse=ValueAnimator.ofFloat(.83f,1.13f);pulse.setDuration(560);pulse.setRepeatCount(ValueAnimator.INFINITE);pulse.setRepeatMode(ValueAnimator.REVERSE);pulse.addUpdateListener(a->{float v=(float)a.getAnimatedValue();orb.setScaleX(v);orb.setScaleY(v);orb.setAlpha(.7f+(v-.83f));});pulse.start();}else{orb.setScaleX(1);orb.setScaleY(1);orb.setAlpha(1);}}
+ void startListening(){if(listening){speech.stopListening();return;}if(!SpeechRecognizer.isRecognitionAvailable(this)){status.setText("Android speech recognition service unavailable");return;}if(checkSelfPermission("android.permission.RECORD_AUDIO")!=android.content.pm.PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{"android.permission.RECORD_AUDIO"},12);return;}if(speech!=null)speech.destroy();speech=SpeechRecognizer.createSpeechRecognizer(this);speech.setRecognitionListener(new RecognitionListener(){public void onReadyForSpeech(Bundle b){status.setText("Listening…");}public void onBeginningOfSpeech(){}public void onRmsChanged(float rms){float s=Math.max(.8f,Math.min(1.3f,1+rms/30));orb.setScaleX(s);orb.setScaleY(s);}public void onBufferReceived(byte[] b){}public void onEndOfSpeech(){status.setText("Processing voice…");}public void onError(int e){listening=false;animate(false);status.setText("Speech error "+e+" • try again");}public void onResults(Bundle b){listening=false;animate(false);ArrayList<String> a=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);if(a!=null&&!a.isEmpty()){input.setText(a.get(0));runCommand(a.get(0));}}public void onPartialResults(Bundle b){}public void onEvent(int t,Bundle b){}});
+ Intent i=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);listening=true;animate(true);status.setText("Listening…");speech.startListening(i);}
+ @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==12&&g.length>0&&g[0]==0)startListening();}
+ void runCommand(String raw){String q=raw.trim();String l=q.toLowerCase(Locale.ROOT);if(q.isEmpty()){status.setText("Enter a command");return;}try{
+ String term=null;boolean youtube=l.contains("youtube")||l.contains("you tube");boolean google=l.contains("google")||l.contains("web");
+ if(l.startsWith("search ")||l.startsWith("find ")||l.startsWith("look up ")||l.startsWith("play ")){term=q.replaceFirst("(?i)^(search|find|look up|play)\\s+","").replaceFirst("(?i)^(on\\s+)?(youtube|you tube|google|the web)\\s*(for\\s+)?","").replaceFirst("(?i)\\s+(on|in)\\s+(youtube|you tube|google|the web)$","").trim();if(term.isEmpty()){status.setText("What should I search for?");return;}String url=youtube||l.startsWith("play ")?"https://www.youtube.com/results?search_query=":"https://www.google.com/search?q=";startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url+Uri.encode(term))));status.setText("Searching for: "+term);return;}
+ if(l.startsWith("open ")){String name=l.substring(5).trim();if(name.contains("youtube")){Intent i=getPackageManager().getLaunchIntentForPackage("com.google.android.youtube");startActivity(i!=null?i:new Intent(Intent.ACTION_VIEW,Uri.parse("https://youtube.com")));}else if(name.contains("settings"))startActivity(new Intent(Settings.ACTION_SETTINGS));else if(name.contains("camera"))startActivity(new Intent("android.media.action.STILL_IMAGE_CAMERA"));else if(name.contains("browser")||name.contains("chrome"))startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://google.com")));else{Intent found=null;for(android.content.pm.ApplicationInfo a:getPackageManager().getInstalledApplications(0)){if(getPackageManager().getApplicationLabel(a).toString().equalsIgnoreCase(name)){found=getPackageManager().getLaunchIntentForPackage(a.packageName);break;}}if(found==null){status.setText("App not found: "+name);return;}startActivity(found);}status.setText("Opened "+name);return;}
+ if(l.contains("youtube")){startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://youtube.com")));return;}
+ askGemini(q);
+ }catch(Exception e){status.setText("Command failed: "+e.getMessage());}}
+ void askGemini(String prompt){String apiKey=getPreferences(0).getString("gemini_key","").trim();if(apiKey.isEmpty()){status.setText("Save your Gemini API key first");return;}if(prompt.trim().isEmpty()){status.setText("Enter a question first");return;}status.setText("Gemini is thinking…");new Thread(()->{String result;HttpURLConnection c=null;try{URL url=new URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");c=(HttpURLConnection)url.openConnection();c.setRequestMethod("POST");c.setConnectTimeout(15000);c.setReadTimeout(45000);c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");c.setRequestProperty("x-goog-api-key",apiKey);JSONObject body=new JSONObject().put("contents",new JSONArray().put(new JSONObject().put("parts",new JSONArray().put(new JSONObject().put("text",prompt)))));try(OutputStream out=c.getOutputStream()){out.write(body.toString().getBytes(StandardCharsets.UTF_8));}int code=c.getResponseCode();InputStream stream=code>=200&&code<300?c.getInputStream():c.getErrorStream();ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=stream.read(buf))!=-1)out.write(buf,0,n);JSONObject j=new JSONObject(out.toString("UTF-8"));if(code>=300)result="Gemini HTTP "+code+": "+j.optJSONObject("error").optString("message","Request failed");else{JSONArray candidates=j.getJSONArray("candidates");JSONArray parts=candidates.getJSONObject(0).getJSONObject("content").getJSONArray("parts");StringBuilder sb=new StringBuilder();for(int k=0;k<parts.length();k++)sb.append(parts.getJSONObject(k).optString("text"));result=sb.toString();}}catch(Exception e){result="Gemini error: "+e.getMessage();}finally{if(c!=null)c.disconnect();}final String answer=result;runOnUiThread(()->status.setText(answer));}).start();}
+ @Override protected void onDestroy(){if(speech!=null)speech.destroy();if(pulse!=null)pulse.cancel();super.onDestroy();}
 }
