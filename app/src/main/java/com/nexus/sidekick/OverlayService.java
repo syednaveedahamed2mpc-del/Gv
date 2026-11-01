@@ -30,7 +30,7 @@ public class OverlayService extends Service {
     private GradientDrawable bg(int fill,int radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));return d;}
     private TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);return t;}
     private void sayStatus(String message){if(status!=null)status.setText(message);}
-    @Override public void onCreate(){super.onCreate();engine=NexusAgent.get(this);
+    @Override public void onCreate(){super.onCreate();engine=AssistantEngine.get(this);
         NotificationManager notifications=getSystemService(NotificationManager.class);
         notifications.createNotificationChannel(new NotificationChannel("nexus_voice","NEXUS voice assistant",NotificationManager.IMPORTANCE_LOW));
         Intent open=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
