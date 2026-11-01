@@ -11,131 +11,159 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.*;
 import android.provider.Settings;
 import android.speech.*;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.view.*;
 import android.widget.*;
+import org.json.JSONObject;
 import java.util.ArrayList;
+import java.util.Locale;
 
-/** Standalone voice panel. Long-press NEVER opens the main activity. */
-public class OverlayService extends Service {
-    private WindowManager windows;private WindowManager.LayoutParams params;
-    private LinearLayout window,panel;private VoiceOrbView orb;
-    private TextView status,answer;
-    private SpeechRecognizer recognizer;
-    private final Handler handler=new Handler(Looper.getMainLooper());
-    private Runnable hold;
-    private boolean moved,held,panelVisible=false,listening=false,retrying=false;
-    private float downX,downY;private int startX,startY;
-    private AssistantEngine engine;
-    private int dp(int d){return (int)(getResources().getDisplayMetrics().density*d+.5f);}
-    private GradientDrawable bg(int fill,int radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));return d;}
-    private TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);return t;}
-    private void sayStatus(String message){if(status!=null)status.setText(message);}
-    @Override public void onCreate(){super.onCreate();engine=AssistantEngine.get(this);
+/** A draggable orb with an independent, optional speech panel. No activity is launched on long press. */
+public final class OverlayService extends Service implements NexusAgent.Listener {
+    private WindowManager manager;private WindowManager.LayoutParams orbParams,panelParams;
+    private VoiceOrbView orb;private LinearLayout panel;
+    private TextView status,heard,answer;private Button approve,deny,followupButton;
+    private SpeechRecognizer recognizer;private TextToSpeech tts;
+    private final Handler ui=new Handler(Looper.getMainLooper());
+    private Runnable hold,approveTask,denyTask;
+    private boolean panelShown=false,listening=false,dragged=false,longPressed=false,session=false,followups=true;
+    private int followupCount=0;
+    private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
+    private GradientDrawable bg(int fill){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(18));d.setStroke(dp(1),0xff2587a0);return d;}
+    private TextView label(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setPadding(0,dp(5),0,dp(5));return t;}
+    private Button btn(String s,Runnable run){Button b=new Button(this);b.setText(s);b.setAllCaps(false);b.setTextColor(Color.WHITE);b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff1b637a));b.setOnClickListener(v->run.run());return b;}
+    @Override public void onCreate(){super.onCreate();
         NotificationManager notifications=getSystemService(NotificationManager.class);
         notifications.createNotificationChannel(new NotificationChannel("nexus_voice","NEXUS voice assistant",NotificationManager.IMPORTANCE_LOW));
-        Intent open=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        Notification n=new Notification.Builder(this,"nexus_voice")
-            .setContentTitle("NEXUS voice assistant").setContentText("Hold the floating orb to speak")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentIntent(PendingIntent.getActivity(this,0,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE))
-            .setOngoing(true).build();
-        try{startForeground(42,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE|ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);}
-        catch(Exception e){Diagnostics.record(this,"OVERLAY","Voice foreground service denied: "+e.getClass().getSimpleName());stopSelf();return;}
-        if(!Settings.canDrawOverlays(this)){Diagnostics.record(this,"OVERLAY","Overlay permission missing");stopSelf();return;}
-        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
-            Diagnostics.record(this,"VOICE","Microphone permission missing; return to NEXUS setup");stopSelf();return;}
-        windows=(WindowManager)getSystemService(WINDOW_SERVICE);
-        window=new LinearLayout(this);window.setOrientation(LinearLayout.VERTICAL);
-        orb=new VoiceOrbView(this);orb.setContentDescription("NEXUS microphone, hold to talk");
-        window.addView(orb,new LinearLayout.LayoutParams(dp(68),dp(68)));
-        panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(14),dp(10),dp(14),dp(12));
-        panel.setBackground(bg(0xf10b2139,19));panel.setVisibility(View.GONE);
-        TextView title=text("✦ NEXUS LISTENING",14,0xff20e6ee);panel.addView(title);
-        status=text("Hold the orb or tap TALK",12,Color.WHITE);status.setPadding(0,dp(6),0,dp(6));panel.addView(status);
-        answer=text("",13,Color.WHITE);answer.setMaxLines(8);panel.addView(answer);
-        LinearLayout controls=new LinearLayout(this);controls.setOrientation(LinearLayout.HORIZONTAL);
-        Button talk=new Button(this);talk.setText("🎙 TALK");talk.setAllCaps(false);
-        talk.setOnClickListener(v->startSpeech());controls.addView(talk,new LinearLayout.LayoutParams(0,dp(53),1));
-        Button hide=new Button(this);hide.setText("✕");hide.setOnClickListener(v->{stopSpeech();showPanel(false);});controls.addView(hide,new LinearLayout.LayoutParams(dp(60),dp(53)));
-        panel.addView(controls);
-        window.addView(panel,new LinearLayout.LayoutParams(dp(280),-2));
-        params=new WindowManager.LayoutParams(dp(68),dp(68),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
-        params.gravity=Gravity.TOP|Gravity.START;params.x=0;params.y=dp(250);
-        orb.setOnTouchListener((v,event)->{
-            switch(event.getActionMasked()){
+        Intent openSettings=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Notification notification=new Notification.Builder(this,"nexus_voice")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("NEXUS Sidekick")
+            .setContentText("Hold the floating orb to talk").setOngoing(true)
+            .setContentIntent(PendingIntent.getActivity(this,0,openSettings,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT)).build();
+        try{startForeground(42,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE|ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);}
+        catch(Exception e){Diagnostics.record(this,"OVERLAY","Mic foreground service blocked "+e.getClass().getSimpleName());stopSelf();return;}
+        if(!Settings.canDrawOverlays(this)||checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){Diagnostics.record(this,"OVERLAY","Overlay or mic permission missing");stopSelf();return;}
+        tts=new TextToSpeech(this,code->Diagnostics.record(this,"TTS",code==TextToSpeech.SUCCESS?"Ready":"Engine unavailable"));
+        tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){
+            @Override public void onStart(String id){}
+            @Override public void onDone(String id){ui.post(()->{
+                if(session&&followups&&followupCount<4){followupCount++;ui.postDelayed(()->startListening(),450);}
+                else{session=false;if(status!=null)status.setText("Ready • hold orb to talk");}
+            });}
+            @Override public void onError(String id){ui.post(()->{session=false;if(status!=null)status.setText("Voice playback unavailable • use TALK");});}
+        });
+        manager=(WindowManager)getSystemService(WINDOW_SERVICE);
+        createPanel();createOrb();
+        Diagnostics.record(this,"OVERLAY","Speech panel ready • no activity redirect");
+    }
+    private void createPanel(){
+        panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(dp(14),dp(12),dp(14),dp(12));panel.setBackground(bg(0xff0b2538));
+        panel.addView(label("✦ NEXUS • LIVE VOICE",17,0xff20e6ee));
+        status=label("Hold orb or press TALK",12,0xffb5d5de);panel.addView(status);
+        heard=label("",13,Color.WHITE);heard.setMaxLines(2);panel.addView(heard);
+        ScrollView reader=new ScrollView(this);answer=label("I'm here. What should I do?",14,Color.WHITE);reader.addView(answer);panel.addView(reader,new LinearLayout.LayoutParams(-1,dp(112)));
+        LinearLayout row=new LinearLayout(this);row.setOrientation(0);
+        row.addView(btn("🎙 TALK",this::startListening),new LinearLayout.LayoutParams(0,dp(45),1));
+        row.addView(btn("■ STOP",this::stopSession),new LinearLayout.LayoutParams(0,dp(45),1));
+        row.addView(btn("× HIDE",this::hidePanel),new LinearLayout.LayoutParams(0,dp(45),1));panel.addView(row);
+        followupButton=btn("Follow-up listening: ON",()->{followups=!followups;followupButton.setText(followups?"Follow-up listening: ON":"Follow-up listening: OFF");});panel.addView(followupButton);
+        panel.addView(btn("⚙ Settings & skills",()->{
+            Intent i=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(i);
+        }));
+        approve=btn("✓ APPROVE ONE ACTION",()->{Runnable r=approveTask;clearApproval();if(r!=null)r.run();});
+        deny=btn("× DENY",()->{Runnable r=denyTask;clearApproval();if(r!=null)r.run();});
+        approve.setVisibility(View.GONE);deny.setVisibility(View.GONE);panel.addView(approve);panel.addView(deny);
+        panelParams=new WindowManager.LayoutParams(Math.min(dp(345),getResources().getDisplayMetrics().widthPixels-dp(14)),dp(395),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
+        panelParams.gravity=Gravity.TOP|Gravity.CENTER_HORIZONTAL;panelParams.y=dp(85);
+    }
+    private void createOrb(){
+        orb=new VoiceOrbView(this);orb.setContentDescription("NEXUS assistant: hold to speak, tap for panel");
+        orbParams=new WindowManager.LayoutParams(dp(69),dp(69),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);
+        orbParams.gravity=Gravity.TOP|Gravity.START;orbParams.x=dp(4);orbParams.y=dp(230);
+        final float threshold=ViewConfiguration.get(this).getScaledTouchSlop()*2f;
+        orb.setOnTouchListener(new View.OnTouchListener(){float x,y;int ox,oy;
+            @Override public boolean onTouch(View v,MotionEvent e){switch(e.getActionMasked()){
                 case MotionEvent.ACTION_DOWN:
-                    downX=event.getRawX();downY=event.getRawY();startX=params.x;startY=params.y;moved=false;held=false;
-                    hold=()->{if(!moved){held=true;showPanel(true);startSpeech();}};
-                    handler.postDelayed(hold,560);return true;
+                    x=e.getRawX();y=e.getRawY();ox=orbParams.x;oy=orbParams.y;dragged=false;longPressed=false;
+                    hold=()->{if(!dragged){longPressed=true;showPanel();startListening();}};
+                    ui.postDelayed(hold,520);return true;
                 case MotionEvent.ACTION_MOVE:
-                    float dx=event.getRawX()-downX,dy=event.getRawY()-downY;
-                    if(Math.hypot(dx,dy)>dp(13)){moved=true;handler.removeCallbacks(hold);}
-                    if(moved){params.x=startX+(int)dx;params.y=startY+(int)dy;
-                        try{windows.updateViewLayout(window,params);}catch(Exception ignored){}}
+                    if(!dragged&&Math.hypot(e.getRawX()-x,e.getRawY()-y)>threshold){dragged=true;ui.removeCallbacks(hold);}
+                    if(dragged){orbParams.x=ox+(int)(e.getRawX()-x);orbParams.y=oy+(int)(e.getRawY()-y);try{manager.updateViewLayout(orb,orbParams);}catch(Exception ignored){}}
                     return true;
                 case MotionEvent.ACTION_UP:case MotionEvent.ACTION_CANCEL:
-                    handler.removeCallbacks(hold);
-                    if(event.getActionMasked()==MotionEvent.ACTION_UP&&!moved&&!held)showPanel(!panelVisible);
-                    return true;
-            }return false;
+                    ui.removeCallbacks(hold);
+                    if(e.getActionMasked()==MotionEvent.ACTION_UP&&!dragged&&!longPressed)showPanel();return true;
+            }return false;}
         });
-        try{windows.addView(window,params);Diagnostics.record(this,"OVERLAY","Voice panel attached; microphone FGS active");}
-        catch(Exception e){Diagnostics.record(this,"OVERLAY","Attach failed: "+e.getClass().getSimpleName());stopSelf();}
+        try{manager.addView(orb,orbParams);}catch(Exception e){Diagnostics.record(this,"OVERLAY","Orb attach "+e.getClass().getSimpleName());stopSelf();}
     }
-    private void showPanel(boolean show){panelVisible=show;panel.setVisibility(show?View.VISIBLE:View.GONE);
-        params.width=dp(show?280:68);params.height=show?WindowManager.LayoutParams.WRAP_CONTENT:dp(68);
-        if(windows!=null)try{windows.updateViewLayout(window,params);}catch(Exception ignored){}
-    }
-    private void stopSpeech(){listening=false;if(recognizer!=null){try{recognizer.cancel();}catch(Exception ignored){}}
-        if(orb!=null)orb.setListening(false);}
-    private void startSpeech(){
-        if(listening){sayStatus("Already listening…");return;}
-        if(!SpeechRecognizer.isRecognitionAvailable(this)){sayStatus("Android Speech Services unavailable");Diagnostics.record(this,"VOICE","No recognizer available");return;}
-        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){sayStatus("Microphone permission missing. Open NEXUS setup.");return;}
+    private void showPanel(){if(panelShown)return;try{manager.addView(panel,panelParams);panelShown=true;}catch(Exception e){Diagnostics.record(this,"OVERLAY","Panel attach "+e.getClass().getSimpleName());}}
+    private void hidePanel(){stopSession();if(panelShown){try{manager.removeView(panel);}catch(Exception ignored){}panelShown=false;}}
+    private void clearApproval(){approveTask=null;denyTask=null;approve.setVisibility(View.GONE);deny.setVisibility(View.GONE);}
+    private void stopSession(){session=false;listening=false;followupCount=0;if(orb!=null)orb.setListening(false);
+        if(recognizer!=null)try{recognizer.cancel();}catch(Exception ignored){}if(tts!=null)tts.stop();
+        if(status!=null)status.setText("Stopped • hold orb to talk");}
+    private void startListening(){showPanel();
+        if(listening){status.setText("Already listening…");return;}
+        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){status.setText("Mic permission needed in NEXUS settings.");return;}
+        if(!SpeechRecognizer.isRecognitionAvailable(this)){status.setText("Android speech service isn't available.");Diagnostics.record(this,"VOICE","No speech provider");return;}
         try{
-            if(recognizer!=null){recognizer.destroy();recognizer=null;}
+            if(tts!=null)tts.stop();if(recognizer!=null)recognizer.destroy();
             recognizer=SpeechRecognizer.createSpeechRecognizer(this);
             recognizer.setRecognitionListener(new RecognitionListener(){
-                public void onReadyForSpeech(Bundle b){sayStatus("Listening • speak now");Diagnostics.record(OverlayService.this,"VOICE","Overlay microphone ready");}
-                public void onBeginningOfSpeech(){sayStatus("Hearing you…");}
-                public void onRmsChanged(float rms){orb.setLevel(rms);}
-                public void onBufferReceived(byte[] b){}
-                public void onEndOfSpeech(){sayStatus("Understanding…");}
-                public void onError(int error){listening=false;orb.setListening(false);
-                    Diagnostics.record(OverlayService.this,"VOICE","Overlay speech error "+error);
-                    if(error==SpeechRecognizer.ERROR_SERVER_DISCONNECTED&&!retrying){
-                        retrying=true;sayStatus("Speech disconnected • reconnecting…");
-                        if(recognizer!=null){recognizer.destroy();recognizer=null;}
-                        handler.postDelayed(()->{if(window!=null)startSpeech();},850);
-                    }else{retrying=false;sayStatus("Speech error "+error+" • tap TALK to retry");}}
-                public void onResults(Bundle b){listening=false;retrying=false;orb.setListening(false);
+                @Override public void onReadyForSpeech(Bundle b){status.setText("Listening… speak now");}
+                @Override public void onBeginningOfSpeech(){status.setText("Hearing you…");}
+                @Override public void onRmsChanged(float level){orb.setLevel(level);}
+                @Override public void onBufferReceived(byte[] b){}
+                @Override public void onEndOfSpeech(){status.setText("Understanding speech…");}
+                @Override public void onError(int e){listening=false;session=false;orb.setListening(false);status.setText("Speech error "+e+" • tap TALK to retry");Diagnostics.record(OverlayService.this,"VOICE","Recognizer error "+e);}
+                @Override public void onResults(Bundle b){listening=false;orb.setListening(false);
                     ArrayList<String> results=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if(results==null||results.isEmpty()){sayStatus("Didn't hear any words");return;}
-                    String transcript=results.get(0);sayStatus("You: "+ToolGuard.truncate(transcript,65));
-                    answer.setText("Processing…");Diagnostics.record(OverlayService.this,"VOICE","Transcript recognized (not logged)");
-                    engine.submit(transcript,(message,done)->{
-                        if(panel==null)return;
-                        answer.setText(ToolGuard.truncate(message,1300));
-                        if(done)sayStatus("Ready • hold orb for next request");
-                    });
+                    if(results==null||results.isEmpty()){session=false;status.setText("No speech captured. Try again.");return;}
+                    heard.setText("You: "+results.get(0));Diagnostics.record(OverlayService.this,"VOICE","Result received");runVoice(results.get(0));
                 }
-                public void onPartialResults(Bundle b){}
-                public void onEvent(int type,Bundle b){}
+                @Override public void onPartialResults(Bundle b){ArrayList<String> words=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);if(words!=null&&!words.isEmpty())heard.setText("You: "+words.get(0));}
+                @Override public void onEvent(int type,Bundle b){}
             });
-            Intent request=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            request.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            request.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);
-            listening=true;orb.setListening(true);sayStatus("Starting microphone…");
-            Diagnostics.record(this,"VOICE","Overlay recognizer start");
-            recognizer.startListening(request);
-        }catch(Exception e){listening=false;orb.setListening(false);sayStatus("Voice couldn't start: "+e.getClass().getSimpleName());
-            Diagnostics.record(this,"VOICE","Overlay start failed: "+e.getClass().getSimpleName());}
+            Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);
+            listening=true;session=true;orb.setListening(true);status.setText("Starting microphone…");Diagnostics.record(this,"VOICE","Started in overlay service");recognizer.startListening(intent);
+        }catch(Exception e){listening=false;session=false;orb.setListening(false);status.setText("Android microphone error: "+e.getClass().getSimpleName());Diagnostics.record(this,"VOICE","Startup failed "+e.getClass().getSimpleName());}
     }
-    @Override public int onStartCommand(Intent intent,int flags,int id){return START_STICKY;}
-    @Override public android.os.IBinder onBind(Intent i){return null;}
-    @Override public void onDestroy(){if(hold!=null)handler.removeCallbacks(hold);stopSpeech();
-        if(recognizer!=null)recognizer.destroy();
-        if(windows!=null&&window!=null)try{windows.removeView(window);}catch(Exception ignored){}
-        super.onDestroy();}
+    private void runVoice(String request){
+        CommandRouter.Command cmd=CommandRouter.parse(request);
+        if(cmd.type==CommandRouter.Type.CHAT||(cmd.type==CommandRouter.Type.OPEN_APP&&(request.toLowerCase(Locale.ROOT).contains(" and ")||request.toLowerCase(Locale.ROOT).contains(" then ")))){
+            NexusAgent.get(this).ask(request,this);return;
+        }
+        try{
+            String tool=null,value=cmd.value;
+            switch(cmd.type){case YOUTUBE_SEARCH:tool="youtube_search";break;case GOOGLE_SEARCH:tool="web_search";break;
+                case OPEN_APP:tool="open_app";break;case OPEN_SETTINGS:tool="open_app";value="settings";break;case OPEN_CAMERA:tool="open_app";value="camera";break;
+                default:break;}
+            if(tool==null){status.setText("What would you like me to do?");session=false;return;}
+            JSONObject args=new JSONObject().put(tool.equals("open_app")?"app":"query",value);
+            reply(SkillExecutor.execute(this,tool,args,true).message);
+        }catch(Exception e){session=false;status.setText("Action failed: "+e.getClass().getSimpleName());}
+    }
+    @Override public void status(String message){ui.post(()->{showPanel();status.setText(message);});}
+    @Override public void reply(String message){ui.post(()->{
+        showPanel();answer.setText(message);status.setText("NEXUS replied");
+        if(tts==null){session=false;return;}
+        String spoken=message.length()>700?message.substring(0,700):message;
+        int rc=tts.speak(spoken,TextToSpeech.QUEUE_FLUSH,null,"nexus_reply_"+System.currentTimeMillis());
+        if(rc==TextToSpeech.ERROR){session=false;status.setText("Text shown; voice playback unavailable.");}
+    });}
+    @Override public void approval(String description,Runnable yes,Runnable no){ui.post(()->{
+        showPanel();session=false;status.setText("Confirm this specific screen action");answer.setText(description);
+        approveTask=yes;denyTask=no;approve.setVisibility(View.VISIBLE);deny.setVisibility(View.VISIBLE);
+    });}
+    @Override public int onStartCommand(Intent i,int flags,int id){return START_STICKY;}
+    @Override public IBinder onBind(Intent i){return null;}
+    @Override public void onDestroy(){stopSession();if(hold!=null)ui.removeCallbacks(hold);
+        if(recognizer!=null)recognizer.destroy();if(tts!=null)tts.shutdown();
+        if(manager!=null){if(panelShown)try{manager.removeView(panel);}catch(Exception ignored){}if(orb!=null)try{manager.removeView(orb);}catch(Exception ignored){}}
+        Diagnostics.record(this,"OVERLAY","Service stopped");super.onDestroy();}
 }
