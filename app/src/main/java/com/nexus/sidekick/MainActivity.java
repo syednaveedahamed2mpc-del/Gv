@@ -4,7 +4,7 @@ public class MainActivity extends Activity {
  LinearLayout panel; EditText input,key;TextView status,orb;SpeechRecognizer speech;boolean listening=false;ValueAnimator pulse;
  TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(Color.WHITE);t.setPadding(8,12,8,12);panel.addView(t);return t;}
  void button(String s,Runnable r){Button b=new Button(this);b.setText(s);panel.addView(b);b.setOnClickListener(v->r.run());}
- public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(Color.rgb(8,14,29));getWindow().getDecorView().setSystemUiVisibility(0);ScrollView sc=new ScrollView(this);sc.setFillViewport(true);sc.setBackgroundColor(Color.rgb(8,14,29));panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(24,36,24,28);sc.addView(panel);setContentView(sc);
+ public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(Color.rgb(8,14,29));getWindow().getDecorView().setSystemUiVisibility(0);ScrollView sc=new ScrollView(this);sc.setFillViewport(true);sc.setFitsSystemWindows(true);sc.setBackgroundColor(Color.rgb(8,14,29));panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(24,36,24,28);sc.addView(panel);setContentView(sc);
  text("✦ NEXUS // SIDEKICK",26);text("VOICE • SEARCH • GEMINI",12);
  orb=text("◉",65);orb.setGravity(Gravity.CENTER);orb.setTextColor(Color.CYAN);orb.setOnLongClickListener(v->{startListening();return true;});orb.setOnClickListener(v->startListening());
  status=text("Ready • tap TALK or long-press the floating orb",15);
