@@ -22,7 +22,7 @@
             android:foregroundServiceType="microphone|specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated visible floating voice assistant overlay"/>
         </service>
-        <service android:name=".NexusAccessibilityService"
+        <service android:name=".DeviceAccessibilityService"
             android:exported="true" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:label="NEXUS device skills">
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>

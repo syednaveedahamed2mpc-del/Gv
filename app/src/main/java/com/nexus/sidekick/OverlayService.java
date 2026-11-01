@@ -28,6 +28,7 @@ public final class OverlayService extends Service implements NexusAgent.Listener
     private final Handler ui=new Handler(Looper.getMainLooper());
     private Runnable hold,approveTask,denyTask;
     private boolean panelShown=false,listening=false,dragged=false,longPressed=false,session=false,followups=true;
+    private int recognizerReconnects=0;
     private int followupCount=0;
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     private GradientDrawable bg(int fill){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(18));d.setStroke(dp(1),0xff2587a0);return d;}
@@ -115,12 +116,12 @@ public final class OverlayService extends Service implements NexusAgent.Listener
             if(tts!=null)tts.stop();if(recognizer!=null)recognizer.destroy();
             recognizer=SpeechRecognizer.createSpeechRecognizer(this);
             recognizer.setRecognitionListener(new RecognitionListener(){
-                @Override public void onReadyForSpeech(Bundle b){status.setText("Listening… speak now");}
+                @Override public void onReadyForSpeech(Bundle b){recognizerReconnects=0;status.setText("Listening… speak now");}
                 @Override public void onBeginningOfSpeech(){status.setText("Hearing you…");}
                 @Override public void onRmsChanged(float level){orb.setLevel(level);}
                 @Override public void onBufferReceived(byte[] b){}
                 @Override public void onEndOfSpeech(){status.setText("Understanding speech…");}
-                @Override public void onError(int e){listening=false;session=false;orb.setListening(false);status.setText("Speech error "+e+" • tap TALK to retry");Diagnostics.record(OverlayService.this,"VOICE","Recognizer error "+e);}
+                @Override public void onError(int e){listening=false;session=false;orb.setListening(false);Diagnostics.record(OverlayService.this,"VOICE","Recognizer error "+e);if(e==SpeechRecognizer.ERROR_SERVER_DISCONNECTED&&recognizerReconnects<1){recognizerReconnects++;status.setText("Speech service disconnected • retrying once…");ui.postDelayed(()->{if(manager!=null&&orb!=null)startListening();},900);}else {recognizerReconnects=0;status.setText("Speech error "+e+" • tap TALK to retry");}}
                 @Override public void onResults(Bundle b){listening=false;orb.setListening(false);
                     ArrayList<String> results=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if(results==null||results.isEmpty()){session=false;status.setText("No speech captured. Try again.");return;}

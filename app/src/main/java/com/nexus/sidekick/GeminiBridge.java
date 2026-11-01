@@ -35,7 +35,7 @@ public final class GeminiBridge {
         selected=choices.get(0);return selected;
     }
     private static int rank(String name){String s=name.toLowerCase(Locale.ROOT);
-        int score=s.contains("3.8")?3800:s.contains("3.6")?3600:s.contains("3.5")?3500:s.contains("3.")?3000:s.contains("2.5")?2500:s.contains("2.0")?2000:1000;
+        int score=s.contains("3.5-flash-lite")?7000:s.contains("3.1-flash-lite")?6800:s.contains("3.6-flash")?6600:s.contains("3.8-flash")?6500:s.contains("3.")?6000:s.contains("2.5")?5000:1000;
         if(s.contains("preview")||s.contains("experimental"))score-=80;return score;
     }
     public static JSONObject generate(String key,String model,JSONArray history)throws Exception {
