@@ -1,0 +1,89 @@
+name: Build WhatsApp LSPatch Experiment
+
+on:
+  push:
+    branches: [lspatch-whatsapp-lab]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whatsapp-lspatch-experiment-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build experimental manager APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out custom patch
+        uses: actions/checkout@v4
+        with:
+          path: lab
+
+      - name: Check out pinned upstream LSPatch
+        uses: actions/checkout@v4
+        with:
+          repository: JingMatrix/LSPatch
+          ref: 4d573639e4192c33afb3f1b76b16fc248dbeb830
+          submodules: recursive
+          fetch-depth: 0
+          path: upstream
+
+      - name: Verify and apply WhatsApp experiments
+        run: |
+          set -euo pipefail
+          python3 -m py_compile lab/tools/apply_whatsapp_patch.py
+          python3 lab/tools/apply_whatsapp_patch.py upstream
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Ensure Ninja available
+        run: ninja --version || (sudo apt-get update && sudo apt-get install -y ninja-build)
+
+      - name: Build APK from patched upstream source
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          {
+            echo 'org.gradle.parallel=true'
+            echo 'org.gradle.jvmargs=-Xmx2048m'
+            echo 'android.native.buildOutput=verbose'
+          } >> gradle.properties
+          ./gradlew buildAll
+
+      - name: Verify generated APK
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          ls -lh out/debug/manager-*.apk
+          test -n "$(find out/debug -maxdepth 1 -name 'manager-*.apk' -print -quit)"
+
+      - name: Upload experimental APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LSPatch-WhatsApp-Experimental
+          path: upstream/out/debug/manager-*.apk
+          if-no-files-found: error
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhatsApp-LSPatch-Build-Diagnostics
+          path: |
+            upstream/**/build/reports/**
+            upstream/**/build/outputs/logs/**
+          if-no-files-found: ignore
