@@ -49,6 +49,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The historical SDK 'tools' package was removed; only install valid packages.
+          packages: 'platform-tools'
 
       - name: Ensure Ninja available
         run: ninja --version || (sudo apt-get update && sudo apt-get install -y ninja-build)
